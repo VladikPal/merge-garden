@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Сад слияний</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none}
+html,body{margin:0;height:100%;background:#e8f5e0;font-family:system-ui,Arial,sans-serif;color:#2d4a2b;overflow:hidden}
+#app{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2vmin;padding:2vmin}
+.top{display:flex;gap:2vmin;width:min(92vmin,520px);justify-content:space-between;align-items:center}
+.box{background:#fff;border-radius:14px;padding:6px 12px;text-align:center;box-shadow:0 2px 0 #c5dfb8;min-width:70px}
+.box small{display:block;font-size:11px;opacity:.7}.box b{font-size:20px}
+#next{font-size:34px;line-height:1.1}
+#board{display:grid;grid-template-columns:repeat(5,1fr);gap:1.2vmin;width:min(92vmin,520px);aspect-ratio:1;background:#b7d9a3;padding:1.5vmin;border-radius:18px}
+.c{background:#d9eecb;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:min(9vmin,48px);cursor:pointer;transition:transform .12s}
+.c:active{transform:scale(.92)}.c.f{background:#fff}.c.pop{animation:pop .3s}
+@keyframes pop{0%{transform:scale(.4)}70%{transform:scale(1.2)}100%{transform:scale(1)}}
+.btns{display:flex;gap:2vmin;width:min(92vmin,520px)}
+button{flex:1;border:0;border-radius:14px;padding:12px 8px;font-size:15px;font-weight:600;background:#5fa845;color:#fff;box-shadow:0 3px 0 #437d2f;cursor:pointer}
+button.alt{background:#fff;color:#2d4a2b;box-shadow:0 3px 0 #c5dfb8}
+#hint{font-size:13px;opacity:.75;min-height:18px;text-align:center}
+#over{position:fixed;inset:0;background:rgba(40,70,30,.8);display:none;align-items:center;justify-content:center;flex-direction:column;gap:14px;color:#fff;text-align:center}
+#over h2{margin:0;font-size:28px}#over button{flex:none;width:220px}
+</style>
+</head>
+<body>
+<div id="app">
+ <div class="top">
+  <div class="box"><small id="lScore">Очки</small><b id="score">0</b></div>
+  <div class="box"><small id="lNext">Следующий</small><span id="next"></span></div>
+  <div class="box"><small id="lBest">Рекорд</small><b id="best">0</b></div>
+ </div>
+ <div id="board"></div>
+ <div id="hint"></div>
+ <div class="btns">
+  <button class="alt" id="swap"></button>
+  <button class="alt" id="snd">🔊</button>
+  <button id="rew"></button>
+ </div>
+</div>
+<div id="over"><h2 id="oT"></h2><div id="oS"></div><button id="again"></button></div>
+<script src="https://unpkg.com/@vkontakte/vk-bridge@2.15.0/dist/browser.min.js"></script>
+<script>
+(function(){
+var T=['','🌰','🌱','🌿','🍀','🌷','🌻','🌳','🏡','🏰'];
+var N=5,MAX=9;
+var TXT={
+ ru:{score:'Очки',next:'Следующий',best:'Рекорд',swap:'🔄 Запас',rew:'🎁 Убрать (видео)',over:'Поле заполнено!',res:'Очки: ',again:'Играть снова',
+  hint:'Тапни пустую клетку. 3 одинаковых рядом сливаются.',remove:'Тапни по предмету, чтобы убрать',stash:'В запасе'},
+ en:{score:'Score',next:'Next',best:'Best',swap:'🔄 Stash',rew:'🎁 Remove (video)',over:'Board is full!',res:'Score: ',again:'Play again',
+  hint:'Tap an empty cell. 3 matching neighbours merge.',remove:'Tap an item to remove it',stash:'Stashed'}
+};
+var L=TXT.ru, ysdk=null, player=null, state={best:0}, board, nxt, stash=0, score=0, removing=false, over=false, mute=false, lastAd=Date.now(), games=0, canSwap=true;
+var $=function(i){return document.getElementById(i)};
+
+function save(){try{localStorage.setItem('sm_best',state.best)}catch(e){} }
+function loadLocal(){try{state.best=+localStorage.getItem('sm_best')||0}catch(e){}}
+
+var ac;function beep(f,d){if(mute)return;try{ac=ac||new(window.AudioContext||window.webkitAudioContext)();var o=ac.createOscillator(),g=ac.createGain();o.frequency.value=f;o.type='sine';g.gain.value=.07;o.connect(g);g.connect(ac.destination);o.start();g.gain.exponentialRampToValueAtTime(.0001,ac.currentTime+d);o.stop(ac.currentTime+d)}catch(e){}}
+
+function rnd(){var r=Math.random();return r<.5?1:r<.8?2:r<.95?3:4}
+function render(pop){
+ var b=$('board');b.innerHTML='';
+ for(var i=0;i<N*N;i++){var d=document.createElement('div');d.className='c'+(board[i]?' f':'');d.textContent=T[board[i]];if(pop&&pop.indexOf(i)>=0)d.classList.add('pop');(function(i){d.onclick=function(){tap(i)}})(i);b.appendChild(d)}
+ $('score').textContent=score;$('best').textContent=state.best;$('next').textContent=T[nxt];
+ $('swap').textContent=stash?(L.stash+': '+T[stash]):L.swap;
+ $('hint').textContent=removing?L.remove:L.hint;
+}
+function group(i){var t=board[i],seen={},q=[i],out=[];seen[i]=1;
+ while(q.length){var c=q.pop();out.push(c);var x=c%N,y=(c/N)|0;
+  [[1,0],[-1,0],[0,1],[0,-1]].forEach(function(d){var nx=x+d[0],ny=y+d[1];if(nx<0||ny<0||nx>=N||ny>=N)return;var n=ny*N+nx;if(!seen[n]&&board[n]===t){seen[n]=1;q.push(n)}})}
+ return out}
+function tap(i){
+ if(over)return;
+ if(removing){if(board[i]){board[i]=0;removing=false;beep(300,.15);render()}return}
+ if(board[i])return;
+ board[i]=nxt;var pop=[i],pos=i,merged=false;
+ while(board[pos]<MAX){var g=group(pos);if(g.length<3)break;var t=board[pos];g.forEach(function(c){board[c]=0});board[pos]=t+1;score+=g.length*t*10;pop=[pos];merged=true;beep(380+t*70,.2)}
+ if(!merged)beep(260,.08);
+ if(score>state.best){state.best=score}
+ nxt=rnd();canSwap=true;render(pop);
+ if(board.every(function(v){return v})){endGame()}
+}
+function endGame(){
+ over=true;save();gp(false);$('oT').textContent=L.over;$('oS').textContent=L.res+score;$('over').style.display='flex';
+}
+function newGame(){
+ board=[];for(var i=0;i<N*N;i++)board.push(0);score=0;stash=0;removing=false;over=false;nxt=rnd();canSwap=true;
+ $('over').style.display='none';render();gp(true);
+}
+function gp(on){}
+
+/* Полноэкранная реклама: только между партиями (после «Играть снова»), не чаще раза в 2 минуты */
+function hasVK(){return window.vkBridge&&typeof window.vkBridge.send==='function'}
+function vkAd(fmt){
+ return window.vkBridge.send('VKWebAppCheckNativeAds',{ad_format:fmt}).then(function(d){
+  if(!d||!d.result)throw new Error('no ad');
+  return window.vkBridge.send('VKWebAppShowNativeAds',{ad_format:fmt});
+ });
+}
+function maybeInterstitial(done){
+ games++;
+ if(hasVK()&&games>=2&&Date.now()-lastAd>120000){
+  var fin=function(){lastAd=Date.now();done()};
+  try{vkAd('interstitial').then(fin).catch(fin);return}catch(e){}
+ }
+ done();
+}
+$('again').onclick=function(){maybeInterstitial(newGame)};
+$('swap').onclick=function(){
+ if(over||!canSwap)return;
+ if(stash){var t=stash;stash=nxt;nxt=t}else{stash=nxt;nxt=rnd()}
+ canSwap=false;render();
+};
+$('snd').onclick=function(){mute=!mute;$('snd').textContent=mute?'🔇':'🔊'};
+/* Видео с наградой — только по желанию игрока */
+$('rew').onclick=function(){
+ if(over)return;
+ if(!hasVK())return;
+ try{vkAd('reward').then(function(r){lastAd=Date.now();if(r&&r.result){removing=true;render()}}).catch(function(){})}catch(e){}
+};
+document.addEventListener('visibilitychange',function(){if(document.hidden)gp(false);else if(!over)gp(true)});
+
+function applyLang(lang){
+ L=TXT[['ru','be','kk','uk','uz'].indexOf(lang)>=0?'ru':'en'];
+ document.documentElement.lang=(L===TXT.ru?'ru':'en');
+ $('lScore').textContent=L.score;$('lNext').textContent=L.next;$('lBest').textContent=L.best;$('rew').textContent=L.rew;$('again').textContent=L.again;
+}
+
+if(hasVK()){try{window.vkBridge.send('VKWebAppInit')}catch(e){}}
+applyLang((navigator.language||'ru').slice(0,2));loadLocal();newGame();
+})();
+</script>
+</body>
+</html>
